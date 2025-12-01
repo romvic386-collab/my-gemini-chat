@@ -1,73 +1,98 @@
 import streamlit as st
 import google.generativeai as genai
-
-# --- ВСТАВЬ СВОЙ КЛЮЧ СЮДА ---
-API_KEY = st.secrets["GOOGLE_API_KEY"]
-
-genai.configure(api_key=API_KEY)
+import time
 
 # --- НАСТРОЙКИ СТРАНИЦЫ ---
-st.set_page_config(page_title="My Gemini Hub", page_icon="🎛️")
+st.set_page_config(page_title="Gemini Hub", page_icon="🛡️", layout="centered")
 
-# --- БОКОВАЯ ПАНЕЛЬ (ВЫБОР МОДЕЛИ) ---
+# --- БОКОВАЯ ПАНЕЛЬ ---
 with st.sidebar:
-    st.title("⚙️ Настройки")
+    st.header("🎛️ Настройки")
     
-    # Создаем выпадающий список
+    # 1. ВЫБОР КЛЮЧА (Мульти-ключ)
+    # Мы ищем в секретах все переменные, которые начинаются на KEY_
+    available_keys = [k for k in st.secrets.keys() if k.startswith("KEY_")]
+    
+    if available_keys:
+        selected_key_name = st.selectbox(
+            "🔑 Выбери ключ API:",
+            options=available_keys,
+            format_func=lambda x: f"Ключ #{x.split('_')[1]} ({x})" # Красивое название
+        )
+        API_KEY = st.secrets[selected_key_name]
+    else:
+        st.error("Нет ключей! Добавь KEY_1, KEY_2 в Secrets.")
+        st.stop()
+
+    st.divider()
+
+    # 2. ВЫБОР МОДЕЛИ
     selected_model = st.radio(
-        "Выберите модель:",
-        options=["gemini-2.5-pro", "gemini-2.5-flash"], # Твои модели из скринов
-        captions=["Умная и мощная (Reasoning)", "Быстрая и легкая"], # Подписи
-        index=0 # По умолчанию выбрана первая
+        "🧠 Модель:",
+        options=["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3-pro-preview"], 
+        index=1 # По умолчанию Flash (быстрая)
     )
     
     st.divider()
-    st.info(f"Активна: **{selected_model}**")
     
-    # Кнопка очистки чата (для удобства)
-    if st.button("🗑️ Очистить историю"):
+    # 3. УПРАВЛЕНИЕ ИСТОРИЕЙ
+    if st.button("🗑️ Стереть всё"):
         st.session_state.messages = []
         st.rerun()
 
-# --- ОСНОВНОЙ ИНТЕРФЕЙС ---
-st.title(f"💬 Чат с {selected_model}")
+    # Кнопка скачивания истории
+    chat_history_text = ""
+    if "messages" in st.session_state:
+        for msg in st.session_state.messages:
+            chat_history_text += f"{msg['role'].upper()}: {msg['content']}\n\n"
+            
+    st.download_button(
+        label="💾 Скачать диалог (.txt)",
+        data=chat_history_text,
+        file_name="gemini_chat_history.txt",
+        mime="text/plain"
+    )
 
-# Инициализация истории
+# --- НАСТРОЙКА API ---
+genai.configure(api_key=API_KEY)
+
+# --- ОСНОВНОЙ ЧАТ ---
+st.title(f"💬 Чат ({selected_model})")
+
+# Инициализация (если пусто)
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Показываем переписку
+# Показываем сообщения
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
 # Поле ввода
 if prompt := st.chat_input("Напиши запрос..."):
-    # 1. Показываем вопрос юзера
-    st.chat_message("user").markdown(prompt)
+    # Добавляем вопрос пользователя
     st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-    # 2. Генерируем ответ выбранной моделью
-    try:
-        # Тут мы подставляем переменную selected_model, которую выбрали в меню
-        model = genai.GenerativeModel(selected_model)
-        
-        with st.chat_message("assistant"):
-            # Создаем пустой контейнер для эффекта "печатания" (стриминг)
-            message_placeholder = st.empty()
-            full_response = ""
-            
-            # Включаем потоковую передачу (чтобы текст появлялся постепенно)
+    # Генерируем ответ
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        full_response = ""
+        try:
+            model = genai.GenerativeModel(selected_model)
             response = model.generate_content(prompt, stream=True)
             
             for chunk in response:
                 if chunk.text:
                     full_response += chunk.text
                     message_placeholder.markdown(full_response + "▌")
+                    # Небольшая задержка для плавности (можно убрать)
+                    time.sleep(0.01) 
             
             message_placeholder.markdown(full_response)
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
             
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
-        
-    except Exception as e:
-        st.error(f"Ошибка API ({selected_model}): {e}")
+        except Exception as e:
+            st.error(f"Ошибка: {e}")
+            st.warning("💡 Совет: Если лимит исчерпан (429), просто выбери другой Ключ в меню слева!")
